@@ -1,7 +1,8 @@
-{-# LANGUAGE DeriveDataTypeable #-}
+{-# LANGUAGE RecordWildCards #-}
 
 module Chrononaut.Command (
       initialise
+    , status
     , create
     , migrate
     , rollback
@@ -9,10 +10,13 @@ module Chrononaut.Command (
     , test
     ) where
 
+import Chrononaut.Config
+import Chrononaut.Template
 import Control.Applicative
 import Control.Arrow
+import Control.Exception    (evaluate)
 import Control.Monad
-import Data.ByteString.Lazy  (ByteString)
+import Data.ByteString.Lazy (ByteString)
 import Data.Char
 import Data.Data
 import Data.Function
@@ -24,47 +28,35 @@ import Data.Word
 import Network.URI
 import Paths_chrononaut
 import System.Directory
-import System.Environment
 import System.Exit
 import System.FilePath
 import System.IO
 import System.Locale
 import System.Process
-import Text.Hastache
-import Text.Hastache.Context
 
 import qualified Data.ByteString.Char8      as BS
 import qualified Data.ByteString.Lazy.Char8 as BL
 
-type Env = [(String, String)]
-
-data Context = Context
-    { description  :: String
-    , currentTime  :: String
-    , identifier   :: String
-    , migrateFile  :: String
-    , rollbackFile :: String
-    } deriving (Data, Typeable)
-
 initialise :: FilePath -> Bool -> IO ()
 initialise dir force = do
-    createDir dir
-    createDir $ joinDir dir "migrate"
-    src <- getDataDir
-    mapM_ (copyFileTo force dir) $ dataFiles src
+    c@Config{..} <- getConfig dir []
+    mapM_ createDir [rootDir, migrationDir]
+    mapM_ (copyFile' force rootDir) $ dataFiles c
+
+-- Show current version, which specific file that is,
+-- what the step difference is, etc.
+status :: FilePath -> [FilePath] -> IO ()
+status dir paths = do
+    c@Config{..} <- getConfig dir paths
+    (code, res)  <- runScript setupScript [currentVersion] environment
+    print res
+    exitWith code
 
 create :: FilePath -> String -> IO ()
 create dir desc = do
-    setup dir
-    t   <- getCurrentTime
-
-    let ts   = timeStamp t
-        up   = fileName desc "up" ts
-        down = fileName desc "down" ts
-        ctx  = Context desc (show t) ts up down
-
-    lbs <- mapM (render ctx) $ templateFiles dir
-    zipWithM_ (writeLBS $ joinDir dir "migrate") [up, down] lbs
+    cfg <- getConfig dir []
+    setup cfg
+    renderMigrations desc cfg
 
 migrate :: FilePath
         -> Bool
@@ -73,7 +65,8 @@ migrate :: FilePath
         -> [FilePath]
         -> IO ()
 migrate dir force step revision paths = do
-    setup dir
+    cfg <- getConfig dir paths
+    setup cfg
 
 rollback :: FilePath
          -> Bool
@@ -82,7 +75,8 @@ rollback :: FilePath
          -> [FilePath]
          -> IO ()
 rollback dir force step revision paths = do
-    setup dir
+    cfg <- getConfig dir paths
+    setup cfg
 
 redo :: FilePath
      -> Bool
@@ -91,90 +85,33 @@ redo :: FilePath
      -> [FilePath]
      -> IO ()
 redo dir force step revision paths = do
-    setup dir
+    cfg <- getConfig dir paths
+    setup cfg
 
-setup :: FilePath -> IO ()
-setup dir = do
-    p  <- and <$> mapM doesFileExist (dataFiles dir)
-    p' <- doesDirectoryExist $ joinDir dir "migrate"
-    unless (p && p') $ do
+setup cfg = do
+    p <- doScriptsExist cfg
+    unless p $ do
         putStrLn "Warning: unable to find data files, running init .."
-        initialise dir False
+        initialise (rootDir cfg) False
 
 test :: FilePath -> [FilePath] -> IO ()
 test dir paths = do
-    p <- connect dir paths
-    if p
+    Config{..} <- getConfig dir paths
+    (c, _)     <- runScript setupScript [createVersionTable] environment
+    if c == ExitSuccess
        then putStrLn "Connected successfully." >> exitSuccess
-       else putStrLn "Connection failure!" >> exitFailure
+       else putStrLn "Connection failure!" >> exitWith c
 
-connect :: FilePath -> [FilePath] -> IO Bool
-connect dir paths = do
-    setup dir
-    e <- Just <$> environment paths
-    p <- runProcess s [] Nothing e Nothing Nothing Nothing
-    c <- waitForProcess p
-    return $ c == ExitSuccess
-  where
-    s = joinDir dir "test.sh"
-
-local :: FilePath
-local = "./.env"
-
-environment :: [FilePath] -> IO Env
-environment paths = do
-    l  <- getEnvironment
-    p  <- doesFileExist local
-    es <- mapM f $ if p then paths ++ [local] else paths
-    return $! nubBy ((==) `on` fst) $ g es ++ l
-  where
-    f x = putStrLn ("Reading " <> x <> " ...") >> readFile x
-    g   = map (second tail . break (== '=')) . lines . concat
-
-timeStamp :: UTCTime -> String
-timeStamp = take 16 . formatTime defaultTimeLocale "%Y%m%d%M%S%q"
-
-fileName :: String -> String -> String -> String
-fileName desc mode ts = take 250 parts <> ".sql"
-  where
-    parts = ts <> "-" <> mode <> "-" <> underscore desc
-
-render :: Data a => a -> FilePath -> IO ByteString
-render ctx tmpl = hastacheFile defaultConfig tmpl $ mkGenericContext ctx
-
-writeLBS :: FilePath -> String -> ByteString -> IO ()
-writeLBS dir name bs = do
-    putStrLn $ "Writing " <> out <> " ..."
-    BL.writeFile out bs
-  where
-    out = joinDir dir name
-
-dataFiles :: FilePath -> [FilePath]
-dataFiles dir = templateFiles dir ++ map (joinDir dir)
-    [ "migrate.sh"
-    , "rollback.sh"
-    , "test.sh"
-    ]
-
-templateFiles :: FilePath -> [FilePath]
-templateFiles dir = map (joinDir dir)
-    [ "migrate.tmpl"
-    , "rollback.tmpl"
-    ]
-
-underscore :: String -> String
-underscore []     = []
-underscore (x:xs) = toLower x : go xs
-  where
-    go []     = []
-    go "_"    = "_"
-    go (c:cs)
-        | isUpper c = '_' : toLower c : go cs
-        | c == ' '  = go cs
-        | otherwise = c   : go cs
-
-joinDir :: FilePath -> FilePath -> FilePath
-joinDir pre = joinPath . (pre :) . replicate 1
+runScript :: FilePath -> [String] -> Env -> IO (ExitCode, String)
+runScript script args env = do
+    (Nothing, Just out, Nothing, pid) <- createProcess $ (proc script args)
+        { std_out = CreatePipe
+        , env     = Just env
+        }
+    res  <- hGetContents out
+    evaluate res >> hClose out
+    code <- waitForProcess pid
+    return (code, res)
 
 createDir :: FilePath -> IO ()
 createDir dir = do
@@ -185,8 +122,8 @@ createDir dir = do
          putStrLn ("Creating " <> dir <> " ...")
          createDirectoryIfMissing True dir
 
-copyFileTo :: Bool -> FilePath -> FilePath -> IO ()
-copyFileTo force dir file = do
+copyFile' :: Bool -> FilePath -> FilePath -> IO ()
+copyFile' force dir file = do
     p <- doesFileExist target
     c <- if not force && p
           then yesOrNo $ target <> " already exists, overwrite?"

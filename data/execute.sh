@@ -1,8 +1,10 @@
 #!/usr/bin/env bash
 
-psql \
+set -e
+
+psql -a -w \
  -U $DATABASE_USER \
  -h $DATABASE_HOST \
  -p $DATABASE_PORT \
  -d $DATABASE \
- > /dev/null 2>&1
+ -c "$1"

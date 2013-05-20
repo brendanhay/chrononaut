@@ -1,6 +1,5 @@
 # Haskell
 cabal-dev
-.configured
 *.o
 *.hi
 *.chi
@@ -12,7 +11,6 @@ dist
 tmp
 .shelly
 vendor
-db
 
 # CTAGS
 TAGS
@@ -26,7 +24,11 @@ tags
 .*.sw[a-z]
 *.un~
 *.org
-.env
 
 # OSX
 .DS_Store
+
+# Chrononaut
+db
+.env
+*.sql

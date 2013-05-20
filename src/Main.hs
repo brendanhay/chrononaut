@@ -13,6 +13,7 @@ main = do
     name <- getProgName
     runChoice (defTerm name)
         [ initTerm     "init"
+        , statusTerm   "status"
         , createTerm   "create"
         , migrateTerm  "migrate"
         , rollbackTerm "rollback"
@@ -46,6 +47,19 @@ initTerm name = (term, info)
         "Init.")
         { termName = name
         , termDoc  = "Init."
+        }
+
+statusTerm :: String -> (Term (IO ()), TermInfo)
+statusTerm name = (term, info)
+  where
+    term = status
+        <$> directory
+        <*> envs
+
+    info = (describe
+        "Status.")
+        { termName = name
+        , termDoc  = "Status."
         }
 
 createTerm :: String -> (Term (IO ()), TermInfo)

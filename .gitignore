@@ -1,0 +1,32 @@
+# Haskell
+cabal-dev
+.configured
+*.o
+*.hi
+*.chi
+*.chs.h
+.devel
+
+# Dirs
+dist
+tmp
+.shelly
+vendor
+db
+
+# CTAGS
+TAGS
+tags
+
+# Emacs/Vim
+*~
+*#
+.#*
+\#*#
+.*.sw[a-z]
+*.un~
+*.org
+.env
+
+# OSX
+.DS_Store

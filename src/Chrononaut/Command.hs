@@ -1,5 +1,4 @@
 {-# LANGUAGE DeriveDataTypeable #-}
-{-# LANGUAGE QuasiQuotes #-}
 
 module Chrononaut.Command (
       initialise
@@ -7,12 +6,16 @@ module Chrononaut.Command (
     , migrate
     , rollback
     , redo
+    , test
     ) where
 
 import Control.Applicative
+import Control.Arrow
 import Control.Monad
+import Data.ByteString.Lazy  (ByteString)
 import Data.Char
 import Data.Data
+import Data.Function
 import Data.List
 import Data.Monoid
 import Data.Time.Clock
@@ -24,13 +27,14 @@ import System.Exit
 import System.FilePath
 import System.IO
 import System.Locale
-import System.Posix.Signals
-import System.ShQQ
+import System.Process
 import Text.Hastache
 import Text.Hastache.Context
 
 import qualified Data.ByteString.Char8      as BS
 import qualified Data.ByteString.Lazy.Char8 as BL
+
+type Env = [(String, String)]
 
 data Context = Context
     { description  :: String
@@ -45,38 +49,86 @@ initialise dir force = do
     createDir dir
     createDir $ joinDir dir "migrate"
     src <- getDataDir
-    mapM_ (copyFileTo force dir) $ templatePaths src
-    putStrLn "Completed."
+    mapM_ (copyFileTo force dir) $ dataFiles src
 
 create :: FilePath -> String -> IO ()
 create dir desc = do
-    p  <- and <$> mapM doesFileExist inp
-    p' <- doesDirectoryExist out
+    setup dir
+    t <- getCurrentTime
+    let ts   = timeStamp t
+        up   = fileName desc "up" ts
+        down = fileName desc "down" ts
+        ctx  = Context desc (show t) ts up down
+    lbs <- mapM (render ctx) $ templateFiles dir
+    zipWithM_ (writeLBS $ joinDir dir "migrate") [up, down] lbs
 
-    if p && p'
-     then do
-         t <- getCurrentTime
-         let ts   = timeStamp t
-             up   = fileName desc "up" ts
-             down = fileName desc "down" ts
-             ctx  = Context desc (show t) ts up down
-         zipWithM_ (writeLBS out) [up, down] =<< mapM (render ctx) inp
-     else do
-         putStrLn "Warning: unable to find templates, running init .."
-         initialise dir False
-         create dir desc
+migrate :: FilePath
+        -> String
+        -> Bool
+        -> Maybe Int
+        -> Maybe Int
+        -> [FilePath]
+        -> IO ()
+migrate dir conn force step revision paths = do
+    setup dir
+
+rollback :: FilePath
+         -> String
+         -> Bool
+         -> Maybe Int
+         -> Maybe Int
+         -> [FilePath]
+         -> IO ()
+rollback dir conn force step revision paths = do
+    setup dir
+
+redo :: FilePath
+     -> String
+     -> Bool
+     -> Maybe Int
+     -> Maybe Int
+     -> [FilePath]
+     -> IO ()
+redo dir conn force step revision paths = do
+    setup dir
+
+setup :: FilePath -> IO ()
+setup dir = do
+    p  <- and <$> mapM doesFileExist (dataFiles dir)
+    p' <- doesDirectoryExist $ joinDir dir "migrate"
+    unless (p && p') $ do
+        putStrLn "Warning: unable to find data files, running init .."
+        initialise dir False
+
+test :: FilePath -> String -> [FilePath] -> IO ()
+test dir conn paths = do
+    p <- connect dir conn paths
+    if p
+       then exitSuccess
+       else exitFailure
+
+connect :: FilePath -> String -> [FilePath] -> IO Bool
+connect dir conn paths = do
+    setup dir
+    e <- Just <$> environment paths
+    p <- runProcess s [] Nothing e Nothing Nothing Nothing
+    c <- waitForProcess p
+    return $ c == ExitSuccess
   where
-    inp = templatePaths dir
-    out = joinDir dir "migrate"
+    s = joinDir dir "test.sh"
 
-migrate :: FilePath -> String -> Bool -> Maybe Int -> Maybe Int -> IO ()
-migrate dir conn force step revision = print step
+local :: FilePath
+local = "./.env"
 
-rollback :: FilePath -> String -> Bool -> Maybe Int -> Maybe Int -> IO ()
-rollback dir conn force step revision = print step
-
-redo :: FilePath -> String -> Bool -> Maybe Int -> Maybe Int -> IO ()
-redo dir conn force step revision = print step
+environment :: [FilePath] -> IO Env
+environment paths = do
+    env <- getEnvironment
+    p   <- doesFileExist local
+    es  <- mapM f $ if p then paths ++ [local] else paths
+    return $! nubBy ((==) `on` fst) $ g es ++ env
+  where
+    f x = putStrLn ("Reading " <> x <> " ...") >> readFile x
+    g   = map (second tail . break (== '=')) . lines . concat
 
 timeStamp :: UTCTime -> String
 timeStamp = take 16 . formatTime defaultTimeLocale "%Y%m%d%M%S%q"
@@ -86,24 +138,28 @@ fileName desc mode ts = take 250 parts <> ".sql"
   where
     parts = ts <> "-" <> mode <> "-" <> underscore desc
 
-render :: Data a => a -> FilePath -> IO BL.ByteString
+render :: Data a => a -> FilePath -> IO ByteString
 render ctx tmpl = hastacheFile defaultConfig tmpl $ mkGenericContext ctx
 
-writeLBS :: FilePath -> String -> BL.ByteString -> IO ()
+writeLBS :: FilePath -> String -> ByteString -> IO ()
 writeLBS dir name bs = do
     putStrLn $ "Writing " <> path <> " ..."
     BL.writeFile path bs
   where
     path = joinDir dir name
 
-templatePaths :: FilePath -> [FilePath]
-templatePaths dir = map (joinDir dir) [migrateTmpl, rollbackTmpl]
+dataFiles :: FilePath -> [FilePath]
+dataFiles dir = templateFiles dir ++ map (joinDir dir)
+    [ "migrate.sh"
+    , "rollback.sh"
+    , "test.sh"
+    ]
 
-migrateTmpl :: String
-migrateTmpl = "migrate.tmpl"
-
-rollbackTmpl :: String
-rollbackTmpl = "rollback.tmpl"
+templateFiles :: FilePath -> [FilePath]
+templateFiles dir = map (joinDir dir)
+    [ "migrate.tmpl"
+    , "rollback.tmpl"
+    ]
 
 underscore :: String -> String
 underscore []     = []
@@ -124,7 +180,9 @@ createDir dir = do
     p <- doesDirectoryExist dir
     if p
      then putStrLn $ dir <> " already exists, continuing ..."
-     else [sh| mkdir -p $dir |] >> putStrLn ("Creating " <> dir <> " ...")
+     else do
+         putStrLn ("Creating " <> dir <> " ...")
+         createDirectoryIfMissing True dir
 
 copyFileTo :: Bool -> FilePath -> FilePath -> IO ()
 copyFileTo force dir file = do
@@ -133,9 +191,7 @@ copyFileTo force dir file = do
           then yesOrNo $ target <> " already exists, overwrite?"
           else return True
     if c
-     then do
-         putStrLn $ "Writing " <> target <> " ..."
-         copyFile file target
+     then putStrLn ("Writing " <> target <> " ...") >> copyFile file target
      else putStrLn $ "Skipping " <> target <> " ..."
   where
     target = joinPath [dir, dirName file]

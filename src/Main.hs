@@ -17,6 +17,7 @@ main = do
         , migrateTerm  "migrate"
         , rollbackTerm "rollback"
         , redoTerm     "redo"
+        , testTerm     "test"
         ]
 
 defTerm :: String -> (Term (IO ()), TermInfo)
@@ -70,6 +71,7 @@ migrateTerm name = (term, info)
         <*> force
         <*> step
         <*> revision
+        <*> envs
 
     info = (describe
         "Migrate.")
@@ -86,6 +88,7 @@ rollbackTerm name = (term, info)
         <*> force
         <*> step
         <*> revision
+        <*> envs
 
     info = (describe
         "Rollback.")
@@ -102,11 +105,26 @@ redoTerm name = (term, info)
         <*> force
         <*> step
         <*> revision
+        <*> envs
 
     info = (describe
         "Redo.")
         { termName = name
         , termDoc  = "Redo."
+        }
+
+testTerm :: String -> (Term (IO ()), TermInfo)
+testTerm name = (term, info)
+  where
+    term = test
+        <$> directory
+        <*> connection
+        <*> envs
+
+    info = (describe
+        "Test.")
+        { termName = name
+        , termDoc  = "Test."
         }
 
 common :: String
@@ -134,6 +152,14 @@ force :: Term Bool
 force = value $ flag (optInfo ["force"])
     { optDoc = "Force operation and ignore any y/n prompts."
     , optSec = common
+    }
+
+envs :: Term [FilePath]
+envs = value . optAll [] $ (optInfo ["env"])
+    { optDoc = "Foreman style .env files to merge into then environment \
+               \used to run commands. Can be repeatedly specified. \
+               \If a .env file exists in the working directory, it will be \
+               \loaded and merged with with the current environment."
     }
 
 connection :: Term String

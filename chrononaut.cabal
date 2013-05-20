@@ -38,11 +38,9 @@ executable chrononaut
         , directory
         , filepath
         , hastache
-        , io-streams
         , network
         , old-locale
         , process
-        , shqq
         , text
         , time
         , unix

@@ -32,12 +32,12 @@ import Text.Hastache.Context
 import qualified Data.ByteString.Char8      as BS
 import qualified Data.ByteString.Lazy.Char8 as BL
 
-initialise :: FilePath -> String -> Bool -> IO ()
-initialise target conn force = do
-    createDir target
-    createDir $ joinDir target "migrate"
+initialise :: FilePath -> Bool -> IO ()
+initialise dir force = do
+    createDir dir
+    createDir $ joinDir dir "migrate"
     src <- getDataDir
-    mapM_ (copyFileTo force target) $ templatePaths src
+    mapM_ (copyFileTo force dir) $ templatePaths src
     putStrLn "Completed."
 
 data Context = Context
@@ -50,27 +50,24 @@ data Context = Context
 
 create :: FilePath -> String -> IO ()
 create dir desc = do
-    p <- and <$> mapM doesFileExist paths
-    if p
+    p  <- and <$> mapM doesFileExist inp
+    p' <- doesDirectoryExist out
+    if p && p'
      then do
          t <- getCurrentTime
-
          let safe = underscore desc
-             ts   = take 16 $ formatTime defaultTimeLocale "%Y%m%d%M%S%q" t
-             up   = ts <> "-up-"   <> safe <> ".sql"
-             down = ts <> "-down-" <> safe <> ".sql"
-
-         lbs <- mapM (render $ Context desc (show t) ts up down) paths
-
-         print lbs
-
-     else error "Unable to find templatePaths, have you run init?"
+             ts   = take stampLength  $ formatTime defaultTimeLocale "%Y%m%d%M%S%q" t
+             up   = take nameLength (ts <> "-up-"   <> safe) <> ".sql"
+             down = take nameLength (ts <> "-down-" <> safe) <> ".sql"
+             ctx  = Context desc (show t) ts up down
+         zipWithM_ (writeLBS out) [up, down] =<< mapM (render ctx) inp
+     else do
+         putStrLn "Warning: unable to find templates, running init .."
+         initialise dir False
+         create dir desc
   where
-    paths = templatePaths dir
-    ctx "name"   = MuVariable "Haskell"
-    ctx "unread" = MuVariable (100 :: Int)
-
-render ctx path = hastacheFile defaultConfig path $ mkGenericContext ctx
+    inp = templatePaths dir
+    out = joinDir dir "migrate"
 
 migrate :: FilePath -> String -> Bool -> Maybe Int -> Maybe Int -> IO ()
 migrate dir conn force step revision = print step
@@ -80,6 +77,22 @@ rollback dir conn force step revision = print step
 
 redo :: FilePath -> String -> Bool -> Maybe Int -> Maybe Int -> IO ()
 redo dir conn force step revision = print step
+
+stampLength :: Int
+stampLength = 16
+
+nameLength :: Int
+nameLength = 250
+
+render :: Data a => a -> FilePath -> IO BL.ByteString
+render ctx tmpl = hastacheFile defaultConfig tmpl $ mkGenericContext ctx
+
+writeLBS :: FilePath -> String -> BL.ByteString -> IO ()
+writeLBS dir name bs = do
+    putStrLn $ "Writing " <> path <> " ..."
+    BL.writeFile path bs
+  where
+    path = joinDir dir name
 
 templatePaths :: FilePath -> [FilePath]
 templatePaths dir = map (joinDir dir) [migrateTmpl, rollbackTmpl]
@@ -114,7 +127,7 @@ createDir dir = do
 copyFileTo :: Bool -> FilePath -> FilePath -> IO ()
 copyFileTo force dir file = do
     p <- doesFileExist target
-    c <- if (not force) && p
+    c <- if not force && p
           then yesOrNo $ target <> " already exists, overwrite?"
           else return True
     if c

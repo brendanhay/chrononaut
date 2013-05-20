@@ -40,7 +40,6 @@ initTerm name = (term, info)
   where
     term = initialise
         <$> directory
-        <*> connection
         <*> force
 
     info = (describe

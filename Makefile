@@ -9,7 +9,9 @@ DEV   := cabal-dev
 # Standard
 #
 
-.PHONY: clean install build dist
+.PHONY: build clean install
+
+all: build lint
 
 build: .devel
 	$(DEV) build
@@ -20,16 +22,11 @@ clean: reconfigure
 install:
 	$(DEV) install
 
-dist: Setup.hs
-	runhaskell Setup.hs sdist
-
-all: install lint unit
-
 #
 # Testing
 #
 
-.PHONY: lint unit integration benchmark
+.PHONY: lint
 
 lint:
 	hlint src

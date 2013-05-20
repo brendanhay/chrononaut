@@ -20,6 +20,8 @@ import Data.List
 import Data.Monoid
 import Data.Time.Clock
 import Data.Time.Format
+import Data.Word
+import Network.URI
 import Paths_chrononaut
 import System.Directory
 import System.Environment
@@ -54,42 +56,41 @@ initialise dir force = do
 create :: FilePath -> String -> IO ()
 create dir desc = do
     setup dir
-    t <- getCurrentTime
+    t   <- getCurrentTime
+
     let ts   = timeStamp t
         up   = fileName desc "up" ts
         down = fileName desc "down" ts
         ctx  = Context desc (show t) ts up down
+
     lbs <- mapM (render ctx) $ templateFiles dir
     zipWithM_ (writeLBS $ joinDir dir "migrate") [up, down] lbs
 
 migrate :: FilePath
-        -> String
         -> Bool
         -> Maybe Int
         -> Maybe Int
         -> [FilePath]
         -> IO ()
-migrate dir conn force step revision paths = do
+migrate dir force step revision paths = do
     setup dir
 
 rollback :: FilePath
-         -> String
          -> Bool
          -> Maybe Int
          -> Maybe Int
          -> [FilePath]
          -> IO ()
-rollback dir conn force step revision paths = do
+rollback dir force step revision paths = do
     setup dir
 
 redo :: FilePath
-     -> String
      -> Bool
      -> Maybe Int
      -> Maybe Int
      -> [FilePath]
      -> IO ()
-redo dir conn force step revision paths = do
+redo dir force step revision paths = do
     setup dir
 
 setup :: FilePath -> IO ()
@@ -100,15 +101,15 @@ setup dir = do
         putStrLn "Warning: unable to find data files, running init .."
         initialise dir False
 
-test :: FilePath -> String -> [FilePath] -> IO ()
-test dir conn paths = do
-    p <- connect dir conn paths
+test :: FilePath -> [FilePath] -> IO ()
+test dir paths = do
+    p <- connect dir paths
     if p
-       then exitSuccess
-       else exitFailure
+       then putStrLn "Connected successfully." >> exitSuccess
+       else putStrLn "Connection failure!" >> exitFailure
 
-connect :: FilePath -> String -> [FilePath] -> IO Bool
-connect dir conn paths = do
+connect :: FilePath -> [FilePath] -> IO Bool
+connect dir paths = do
     setup dir
     e <- Just <$> environment paths
     p <- runProcess s [] Nothing e Nothing Nothing Nothing
@@ -122,10 +123,10 @@ local = "./.env"
 
 environment :: [FilePath] -> IO Env
 environment paths = do
-    env <- getEnvironment
-    p   <- doesFileExist local
-    es  <- mapM f $ if p then paths ++ [local] else paths
-    return $! nubBy ((==) `on` fst) $ g es ++ env
+    l  <- getEnvironment
+    p  <- doesFileExist local
+    es <- mapM f $ if p then paths ++ [local] else paths
+    return $! nubBy ((==) `on` fst) $ g es ++ l
   where
     f x = putStrLn ("Reading " <> x <> " ...") >> readFile x
     g   = map (second tail . break (== '=')) . lines . concat
@@ -143,10 +144,10 @@ render ctx tmpl = hastacheFile defaultConfig tmpl $ mkGenericContext ctx
 
 writeLBS :: FilePath -> String -> ByteString -> IO ()
 writeLBS dir name bs = do
-    putStrLn $ "Writing " <> path <> " ..."
-    BL.writeFile path bs
+    putStrLn $ "Writing " <> out <> " ..."
+    BL.writeFile out bs
   where
-    path = joinDir dir name
+    out = joinDir dir name
 
 dataFiles :: FilePath -> [FilePath]
 dataFiles dir = templateFiles dir ++ map (joinDir dir)

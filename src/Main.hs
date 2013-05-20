@@ -23,9 +23,8 @@ main = do
 defTerm :: String -> (Term (IO ()), TermInfo)
 defTerm name = (term, info)
   where
-    term = ret $ (\_ _ _ -> helpFail Pager Nothing)
+    term = ret $ (\_ _ -> helpFail Pager Nothing)
         <$> directory
-        <*> connection
         <*> force
 
     info = (describe
@@ -67,7 +66,6 @@ migrateTerm name = (term, info)
   where
     term = migrate
         <$> directory
-        <*> connection
         <*> force
         <*> step
         <*> revision
@@ -84,7 +82,6 @@ rollbackTerm name = (term, info)
   where
     term = rollback
         <$> directory
-        <*> connection
         <*> force
         <*> step
         <*> revision
@@ -101,7 +98,6 @@ redoTerm name = (term, info)
   where
     term = redo
         <$> directory
-        <*> connection
         <*> force
         <*> step
         <*> revision
@@ -118,7 +114,6 @@ testTerm name = (term, info)
   where
     term = test
         <$> directory
-        <*> connection
         <*> envs
 
     info = (describe
@@ -160,13 +155,6 @@ envs = value . optAll [] $ (optInfo ["env"])
                \used to run commands. Can be repeatedly specified. \
                \If a .env file exists in the working directory, it will be \
                \loaded and merged with with the current environment."
-    }
-
-connection :: Term String
-connection = value . opt "DATABASE_URL" $ (optInfo ["connection"])
-    { optDoc = "Database connection to use. Can be a url or an \
-               \environment variable to read."
-    , optSec = common
     }
 
 description :: Term String

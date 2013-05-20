@@ -32,14 +32,6 @@ import Text.Hastache.Context
 import qualified Data.ByteString.Char8      as BS
 import qualified Data.ByteString.Lazy.Char8 as BL
 
-initialise :: FilePath -> Bool -> IO ()
-initialise dir force = do
-    createDir dir
-    createDir $ joinDir dir "migrate"
-    src <- getDataDir
-    mapM_ (copyFileTo force dir) $ templatePaths src
-    putStrLn "Completed."
-
 data Context = Context
     { description  :: String
     , currentTime  :: String
@@ -48,17 +40,25 @@ data Context = Context
     , rollbackFile :: String
     } deriving (Data, Typeable)
 
+initialise :: FilePath -> Bool -> IO ()
+initialise dir force = do
+    createDir dir
+    createDir $ joinDir dir "migrate"
+    src <- getDataDir
+    mapM_ (copyFileTo force dir) $ templatePaths src
+    putStrLn "Completed."
+
 create :: FilePath -> String -> IO ()
 create dir desc = do
     p  <- and <$> mapM doesFileExist inp
     p' <- doesDirectoryExist out
+
     if p && p'
      then do
          t <- getCurrentTime
-         let safe = underscore desc
-             ts   = take stampLength  $ formatTime defaultTimeLocale "%Y%m%d%M%S%q" t
-             up   = take nameLength (ts <> "-up-"   <> safe) <> ".sql"
-             down = take nameLength (ts <> "-down-" <> safe) <> ".sql"
+         let ts   = timeStamp t
+             up   = fileName desc "up" ts
+             down = fileName desc "down" ts
              ctx  = Context desc (show t) ts up down
          zipWithM_ (writeLBS out) [up, down] =<< mapM (render ctx) inp
      else do
@@ -78,11 +78,13 @@ rollback dir conn force step revision = print step
 redo :: FilePath -> String -> Bool -> Maybe Int -> Maybe Int -> IO ()
 redo dir conn force step revision = print step
 
-stampLength :: Int
-stampLength = 16
+timeStamp :: UTCTime -> String
+timeStamp = take 16 . formatTime defaultTimeLocale "%Y%m%d%M%S%q"
 
-nameLength :: Int
-nameLength = 250
+fileName :: String -> String -> String -> String
+fileName desc mode ts = take 250 parts <> ".sql"
+  where
+    parts = ts <> "-" <> mode <> "-" <> underscore desc
 
 render :: Data a => a -> FilePath -> IO BL.ByteString
 render ctx tmpl = hastacheFile defaultConfig tmpl $ mkGenericContext ctx

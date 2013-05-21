@@ -10,6 +10,8 @@ module Chrononaut.Command (
     , test
     ) where
 
+import Prelude hiding (log)
+
 import Chrononaut.Config
 import Chrononaut.Directory
 import Chrononaut.Migration
@@ -21,7 +23,8 @@ import Data.Version
 import System.Exit
 import System.IO
 
-import qualified Paths_chrononaut as P
+import qualified Chrononaut.Revision as R
+import qualified Paths_chrononaut    as P
 
 -- Investigate switching back to a DATABASE_URL since psql supports it
 
@@ -37,26 +40,8 @@ initialise dir force = do
 status :: FilePath -> [FilePath] -> IO ()
 status dir paths = do
     cfg <- getConfig dir paths
-    rs  <- getRevisionLog cfg
-    r   <- getCurrentRevision cfg
-
-    let rev  = fromMaybe 0 r
-        revs = map fst rs
-        diff = fromMaybe (length revs) $ rev `elemIndex` reverse revs
-
-    print (rev, revs, diff)
-
-    putStr . unlines $
-        [ "Chrononaut Version: " ++ showVersion P.version
-        , "Revision: " ++ show rev ++
-            if diff > 0
-             then " (behind: " ++ show diff ++ ")"
-             else ""
-
-        , "Log:"
-        ] ++ (map (\(n, s) -> "  " ++ show n ++ " - " ++ s) rs)
-          ++ ["  " ++ show (length rs) ++ " total"]
-
+    log <- R.getLog cfg
+    print log
 
 create :: FilePath -> String -> IO ()
 create dir desc = do

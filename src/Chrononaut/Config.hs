@@ -14,9 +14,9 @@ import System.FilePath
 type Env = [(String, String)]
 
 data Config = Config
-    { cfgRoot :: FilePath
-    , cfgData :: FilePath
-    , cfgEnv  :: Env
+    { cfgRoot :: !FilePath
+    , cfgData :: !FilePath
+    , cfgEnv  :: !Env
     }
 
 migrationDir :: Config -> FilePath

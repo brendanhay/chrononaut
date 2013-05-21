@@ -4,77 +4,49 @@ module Chrononaut.Config where
 
 import Control.Applicative
 import Control.Arrow
-import Control.Monad
-import Data.ByteString.Lazy  (ByteString)
-import Data.Char
-import Data.Data
 import Data.Function
 import Data.List
-import Data.Monoid
-import Data.Time.Clock
-import Data.Time.Format
-import Data.Word
-import Network.URI
 import Paths_chrononaut
 import System.Directory
 import System.Environment
-import System.Exit
 import System.FilePath
-import System.Locale
 
 type Env = [(String, String)]
 
 data Config = Config
-    { rootDir        :: FilePath
-    , dataDir        :: FilePath
-    , environment    :: Env
-    , migrationDir   :: FilePath
-    , setupScript    :: FilePath
-    , migrateScript  :: FilePath
-    , rollbackScript :: FilePath
-    , migrateTmpl    :: FilePath
-    , rollbackTmpl   :: FilePath
+    { cfgRoot :: FilePath
+    , cfgData :: FilePath
+    , cfgEnv  :: Env
     }
 
-dataFiles :: Config -> [FilePath]
-dataFiles Config{..} = map f
-    [ setupScript
-    , migrateScript
-    , rollbackScript
-    , migrateTmpl
-    , rollbackTmpl
-    ]
-  where
-    f x = joinPath [dataDir, last $ split '/' x]
+migrationDir :: Config -> FilePath
+migrationDir = (`rootPath` "migrate")
+
+script :: Config -> FilePath
+script = (`rootPath` "chrononaut.sh")
+
+migrateTmpl, rollbackTmpl  :: Config -> FilePath
+migrateTmpl  = (`rootPath` "migrate.tmpl")
+rollbackTmpl = (`rootPath` "rollback.tmpl")
+
+rootPath :: Config -> FilePath -> FilePath
+rootPath cfg = joinPath . (cfgRoot cfg :) . replicate 1
+
+dataFiles :: Config -> IO [FilePath]
+dataFiles Config{..} = do
+    fs <- getDirectoryContents cfgData
+    return . map (joinDir cfgData) $ filter (not . isPrefixOf ".") fs
 
 getConfig :: FilePath -> [FilePath] -> IO Config
-getConfig root envs = do
-    d <- getDataDir
-    e <- loadEnvironment envs
-    return $ Config root d e
-        (f "migrate")
-        (f "execute.sh")
-        (f "migrate.sh")
-        (f "rollback.sh")
-        (f "migrate.tmpl")
-        (f "rollback.tmpl")
-  where
-    f = joinPath . (root :) . replicate 1
+getConfig root envs = Config root <$> getDataDir <*> loadEnvironment envs
 
-doScriptsExist :: Config -> IO Bool
-doScriptsExist cfg = and <$> mapM (doesFileExist . ($ cfg))
-    [ setupScript
-    , migrateScript
-    , rollbackScript
+isRootInitialised :: Config -> IO Bool
+isRootInitialised cfg = and <$> mapM (doesFileExist . ($ cfg))
+    [ script
+    , migrateTmpl
+    , rollbackTmpl
+    , migrationDir
     ]
-
-createVersionTable :: String
-createVersionTable =
-    "CREATE TABLE IF NOT EXISTS migration_version (version integer NOT NULL);"
-
-currentVersion :: String
-currentVersion =
-    "SELECT MAX(version) FROM migration_version LIMIT 1;"
 
 localEnvironment :: FilePath
 localEnvironment = "./.env"
@@ -94,9 +66,3 @@ mergeEnvironments a b = nubBy ((==) `on` fst) $ a ++ b
 
 joinDir :: FilePath -> FilePath -> FilePath
 joinDir pre = joinPath . (pre :) . replicate 1
-
-split :: Char -> String -> [String]
-split delim s | [] <- rest = [token]
-              | otherwise  = token : split delim (tail rest)
-  where
-    (token, rest) = span (/= delim) s

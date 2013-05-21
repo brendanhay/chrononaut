@@ -11,52 +11,58 @@ module Chrononaut.Command (
     ) where
 
 import Chrononaut.Config
-import Chrononaut.Template
-import Control.Applicative
-import Control.Arrow
-import Control.Exception    (evaluate)
+import Chrononaut.Directory
+import Chrononaut.Migration
+import Chrononaut.SQL
 import Control.Monad
-import Data.ByteString.Lazy (ByteString)
-import Data.Char
-import Data.Data
-import Data.Function
 import Data.List
-import Data.Monoid
-import Data.Time.Clock
-import Data.Time.Format
-import Data.Word
-import Network.URI
-import Paths_chrononaut
-import System.Directory
+import Data.Maybe
+import Data.Version
 import System.Exit
-import System.FilePath
 import System.IO
-import System.Locale
-import System.Process
 
-import qualified Data.ByteString.Char8      as BS
-import qualified Data.ByteString.Lazy.Char8 as BL
+import qualified Paths_chrononaut as P
+
+-- Investigate switching back to a DATABASE_URL since psql supports it
 
 initialise :: FilePath -> Bool -> IO ()
 initialise dir force = do
-    c@Config{..} <- getConfig dir []
-    mapM_ createDir [rootDir, migrationDir]
-    mapM_ (copyFile' force rootDir) $ dataFiles c
+    cfg@Config{..} <- getConfig dir []
+    createDir $ migrationDir cfg
+    fs <- dataFiles cfg
+    mapM_ (\f -> copyAll force f cfgRoot) fs
 
 -- Show current version, which specific file that is,
 -- what the step difference is, etc.
 status :: FilePath -> [FilePath] -> IO ()
 status dir paths = do
-    c@Config{..} <- getConfig dir paths
-    (code, res)  <- runScript setupScript [currentVersion] environment
-    print res
-    exitWith code
+    cfg <- getConfig dir paths
+    rs  <- getRevisionLog cfg
+    r   <- getCurrentRevision cfg
+
+    let rev  = fromMaybe 0 r
+        revs = map fst rs
+        diff = fromMaybe (length revs) $ rev `elemIndex` reverse revs
+
+    print (rev, revs, diff)
+
+    putStr . unlines $
+        [ "Chrononaut Version: " ++ showVersion P.version
+        , "Revision: " ++ show rev ++
+            if diff > 0
+             then " (behind: " ++ show diff ++ ")"
+             else ""
+
+        , "Log:"
+        ] ++ (map (\(n, s) -> "  " ++ show n ++ " - " ++ s) rs)
+          ++ ["  " ++ show (length rs) ++ " total"]
+
 
 create :: FilePath -> String -> IO ()
 create dir desc = do
     cfg <- getConfig dir []
     setup cfg
-    renderMigrations desc cfg
+    renderMigration desc cfg
 
 migrate :: FilePath
         -> Bool
@@ -64,9 +70,10 @@ migrate :: FilePath
         -> Maybe Int
         -> [FilePath]
         -> IO ()
-migrate dir force step revision paths = do
+migrate dir force step rev paths = do
     cfg <- getConfig dir paths
     setup cfg
+    
 
 rollback :: FilePath
          -> Bool
@@ -74,7 +81,7 @@ rollback :: FilePath
          -> Maybe Int
          -> [FilePath]
          -> IO ()
-rollback dir force step revision paths = do
+rollback dir force step rev paths = do
     cfg <- getConfig dir paths
     setup cfg
 
@@ -84,67 +91,21 @@ redo :: FilePath
      -> Maybe Int
      -> [FilePath]
      -> IO ()
-redo dir force step revision paths = do
+redo dir force step rev paths = do
     cfg <- getConfig dir paths
     setup cfg
 
+setup :: Config -> IO ()
 setup cfg = do
-    p <- doScriptsExist cfg
+    p <- isRootInitialised cfg
     unless p $ do
         putStrLn "Warning: unable to find data files, running init .."
-        initialise (rootDir cfg) False
+        initialise (cfgRoot cfg) False
 
 test :: FilePath -> [FilePath] -> IO ()
-test dir paths = do
-    Config{..} <- getConfig dir paths
-    (c, _)     <- runScript setupScript [createVersionTable] environment
-    if c == ExitSuccess
-       then putStrLn "Connected successfully." >> exitSuccess
-       else putStrLn "Connection failure!" >> exitWith c
-
-runScript :: FilePath -> [String] -> Env -> IO (ExitCode, String)
-runScript script args env = do
-    (Nothing, Just out, Nothing, pid) <- createProcess $ (proc script args)
-        { std_out = CreatePipe
-        , env     = Just env
-        }
-    res  <- hGetContents out
-    evaluate res >> hClose out
-    code <- waitForProcess pid
-    return (code, res)
-
-createDir :: FilePath -> IO ()
-createDir dir = do
-    p <- doesDirectoryExist dir
-    if p
-     then putStrLn $ dir <> " already exists, continuing ..."
-     else do
-         putStrLn ("Creating " <> dir <> " ...")
-         createDirectoryIfMissing True dir
-
-copyFile' :: Bool -> FilePath -> FilePath -> IO ()
-copyFile' force dir file = do
-    p <- doesFileExist target
-    c <- if not force && p
-          then yesOrNo $ target <> " already exists, overwrite?"
-          else return True
-    if c
-     then putStrLn ("Writing " <> target <> " ...") >> copyFile file target
-     else putStrLn $ "Skipping " <> target <> " ..."
-  where
-    target = joinPath [dir, dirName file]
-
-dirName :: FilePath -> String
-dirName = BS.unpack . snd . BS.breakEnd (== '/') . BS.pack
-
-yesOrNo :: String -> IO Bool
-yesOrNo prompt = do
-    putStr $ prompt <> " [y/n]: "
-    hFlush stdout
-    str <- getLine
-    case str of
-        "y" -> return True
-        "n" -> return False
-        _   -> do
-            putStrLn "Invalid response, please enter 'y' or 'n'."
-            yesOrNo prompt
+test dir paths = return ()
+    -- cfg    <- getConfig dir paths
+    -- (c, _) <- runScript ["string", createVersionTable] cfg
+    -- if c == ExitSuccess
+    --    then putStrLn "Connected successfully." >> exitSuccess
+    --    else putStrLn "Connection failure!" >> exitWith c

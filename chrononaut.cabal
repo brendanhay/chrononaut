@@ -1,6 +1,6 @@
 name:                  chrononaut
 version:               0.1.0
-synopsis:              Simple SQL file based migrations
+synopsis:              Simple SQL file based migrations for PostgreSQL
 license:               OtherLicense
 license-file:          LICENSE
 author:                Brendan Hay
@@ -38,11 +38,15 @@ executable chrononaut
         , directory
         , filepath
         , hastache
+        , mtl
+        , MonadCatchIO-transformers
         , network
         , old-locale
-        , process
+        , postgresql-simple
+        , resource-pool
         , safe
         , template-haskell
         , text
         , time
+        , transformers
         , unix

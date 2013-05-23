@@ -20,9 +20,12 @@ import Network.URI                (isAbsoluteURI)
 import Paths_chrononaut           (getDataDir)
 import System.Directory
 import System.Environment
+import System.Exit
 import System.FilePath
+import System.IO
 
 import qualified Data.ByteString.Char8 as BS
+import qualified System.Process        as P
 
 newtype DB = DB { getDBPool :: Pool Connection }
 
@@ -102,13 +105,34 @@ localEnv = "./.env"
 
 loadEnvs :: [FilePath] -> IO Env
 loadEnvs paths = do
-    l <- getEnvironment
     p <- doesFileExist localEnv
     s <- mapM readFile $ if p then paths ++ [localEnv] else paths
-    return $! parseEnv s `mergeEnvs` l
+    expandVars s
 
-parseEnv :: [String] -> Env
-parseEnv = map (second tail . break (== '=')) . lines . concat
+expandVars :: [String] -> IO Env
+expandVars vars = do
+    (Nothing, Just h, Nothing, p) <- P.createProcess $ expandEnv vars
 
-mergeEnvs :: Env -> Env -> Env
-mergeEnvs a b = nubBy ((==) `on` fst) $ a ++ b
+    !c <- P.waitForProcess p
+    !s <- hGetContents h
+
+    hClose h
+
+    when (c /= ExitSuccess)
+         (error "Failed to get environment variables")
+
+    return $! parseEnv s
+
+expandEnv :: [String] -> P.CreateProcess
+expandEnv vars = (P.shell $ replaceBreaks (concat vars) ++ "env")
+    { P.std_out = P.CreatePipe
+    }
+
+parseEnv :: String -> Env
+parseEnv = map (second tail . break (== '=')) . lines
+
+replaceBreaks :: String -> String
+replaceBreaks = map f
+  where
+    f '\n' = ' '
+    f c    = c

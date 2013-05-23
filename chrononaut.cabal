@@ -43,6 +43,7 @@ executable chrononaut
         , network
         , old-locale
         , postgresql-simple
+        , process
         , resource-pool
         , safe
         , template-haskell

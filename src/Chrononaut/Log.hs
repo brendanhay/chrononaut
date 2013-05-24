@@ -1,28 +1,29 @@
+{-# LANGUAGE BangPatterns #-}
+{-# LANGUAGE DeriveDataTypeable #-}
 {-# LANGUAGE RecordWildCards #-}
 
 module Chrononaut.Log (
-    -- * Exported Data Types
-      Rev(..)
+    -- * Revision
+      Rev
 
-    -- * Opaque Data Structure
+    -- * Log
     , Log
-
-    -- * Operations
     , getLog
-    , newRevision
-    , migratePath
-    , rollbackPath
+    , append
     , current
     , diff
     ) where
 
-import Prelude             hiding (log)
+import Prelude                 hiding (log)
 
 import Chrononaut.Schema
 import Chrononaut.Types
+import Control.Applicative
+import Control.Monad.CatchIO
 import Control.Monad.IO.Class
 import Data.Char
-import Data.List           hiding (partition)
+import Data.Data
+import Data.List               hiding (partition)
 import Data.Maybe
 import Data.Monoid
 import Data.Time.Clock
@@ -31,20 +32,27 @@ import Safe
 import System.Directory
 import System.FilePath
 import System.Locale
+import Text.Hastache
+import Text.Hastache.Context
 import Text.Printf
 
-data Mode = Up | Down
+import qualified Data.ByteString.Lazy.Char8 as BL
 
-instance Show Mode where
-    show Up   = "up"
-    show Down = "down"
+maxLength :: Int
+maxLength = 16
+
+data Ctx = Ctx
+    { description  :: !String
+    , revision     :: !String
+    , date         :: !String
+    , migrate      :: !String
+    , rollback     :: !String
+    } deriving (Data, Typeable)
 
 data Rev = Rev !Int !String deriving (Eq, Ord)
 
 instance Show Rev where
-    show (Rev n s) = printf fmt n <> " - " <> s
-      where
-        fmt = "%016d"
+    show (Rev n s) = printf ("%0" ++ show maxLength ++ "d") n ++ " - " ++ s
 
 data Log = Log
     { logCur  :: !(Maybe Int)
@@ -53,9 +61,9 @@ data Log = Log
 
 instance Show Log where
     show log@Log{..} = unlines $ intersperse "#"
-        [ "# Your database is " <> show (offset log) <> " revision(s) behind."
+        [ "# Your database is " ++ show (offset log) ++ " revision(s) behind."
         , "# Revision:"
-        , "#   " <> maybe "<PENDING>" show (current log)
+        , "#   " ++ maybe "<PENDING>" show (current log)
         , "# Pending:"
         , f p
         , "# Applied:"
@@ -63,28 +71,38 @@ instance Show Log where
         ]
       where
         f []   = "#"
-        f xs   = intercalate "\n" $ map (("#   " <>) . show) xs
+        f xs   = intercalate "\n" $ map (("#   " ++) . show) xs
         (p, a) = pending log
 
-maxLength :: Int
-maxLength = 16
-
-getLog :: FilePath -> App IO Log
+getLog :: (Applicative m, MonadCatchIO m) => FilePath -> App m Log
 getLog dir = do
     rs  <- liftIO $ getDirectoryContents dir
     cur <- getRevision
     return $! Log cur . nub . sort $ mapMaybe fromPath rs
 
-newRevision :: String -> IO Rev
-newRevision desc = do
-    t <- getCurrentTime
-    return $! Rev (timeStamp t) (underscore desc)
+append :: MonadIO m => String -> Log -> App m Log
+append desc log = do
+    !cur <- liftIO getCurrentTime
 
-migratePath :: Rev -> FilePath
-migratePath = fileName Up
+    let ts   = timeStamp cur
+        rev  = Rev ts (underscore desc)
+        up   = fileName "up"   rev
+        down = fileName "down" rev
+        ctx  = Ctx desc (show ts) (show cur) up down
 
-rollbackPath :: Rev -> FilePath
-rollbackPath = fileName Down
+    render up   "migrate"  ctx
+    render down "rollback" ctx
+
+    return $! Log (logCur log) (logRevs log ++ [rev])
+
+render :: (MonadIO m, Data a) => String -> String -> a -> App m ()
+render path tmpl ctx = do
+    t <- templatePath tmpl
+    f <- rootPath path
+    liftIO $ do
+        !bs <- hastacheFile defaultConfig t $ mkGenericContext ctx
+        putStrLn $ "Writing " <> f <> " ..."
+        BL.writeFile f bs
 
 current :: Log -> Maybe Rev
 current log = logCur log >>= (`byId` logRevs log)
@@ -95,9 +113,9 @@ diff step n log =
         (Just (ps, _), Nothing) ->
             Right ps
         (Nothing, Just x) ->
-            Left $ "Unable to find revision matching " <> show x
+            Left $ "Unable to find revision matching " ++ show x
         (_, _) ->
-            Left $ "Step " <> show step <> " is out of range"
+            Left $ "Step " ++ show step ++ " is out of range"
 
 partition :: Int -> Maybe Int -> [Rev] -> Maybe ([Rev], [Rev])
 partition step n rs = maybe (partitionStep step rs) (`partitionId` rs) n
@@ -131,10 +149,10 @@ fromPath path = do
   where
     xs = split (== '-') . dropExtension $ takeFileName path
 
-fileName :: Mode -> Rev -> FilePath
-fileName mode (Rev n s) = take 250 parts <> ".sql"
+fileName :: String -> Rev -> FilePath
+fileName mode (Rev n s) = take 250 parts ++ ".sql"
   where
-    parts = show n <> "-" <> show mode <> "-" <> s
+    parts = show n ++ "-" ++ mode ++ "-" ++ s
 
 timeStamp :: UTCTime -> Int
 timeStamp =

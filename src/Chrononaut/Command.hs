@@ -10,7 +10,7 @@ module Chrononaut.Command where
 
 import Prelude hiding (log)
 
-import Chrononaut.Directory
+import Chrononaut.Path
 import Chrononaut.Schema
 import Chrononaut.Types
 import Control.Applicative

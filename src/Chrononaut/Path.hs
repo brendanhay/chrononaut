@@ -1,4 +1,4 @@
-module Chrononaut.Directory where
+module Chrononaut.Path where
 
 import Control.Monad
 import Data.Monoid

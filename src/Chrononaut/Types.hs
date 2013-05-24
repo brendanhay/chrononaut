@@ -11,15 +11,12 @@ import Control.Monad.CatchIO
 import Control.Monad.IO.Class
 import Control.Monad.State
 import Data.ByteString            (ByteString)
-import Data.Function
-import Data.List
 import Data.Monoid
 import Data.Pool
 import Database.PostgreSQL.Simple (Connection, connectPostgreSQL, close)
 import Network.URI                (isAbsoluteURI)
 import Paths_chrononaut           (getDataDir)
 import System.Directory
-import System.Environment
 import System.Exit
 import System.FilePath
 import System.IO
@@ -27,24 +24,14 @@ import System.IO
 import qualified Data.ByteString.Char8 as BS
 import qualified System.Process        as P
 
+type Env = [(String, String)]
+
+newtype Url = Url ByteString deriving (Show)
+
 newtype DB = DB { getDBPool :: Pool Connection }
 
 class (Applicative m, MonadIO m, MonadCatchIO m) => HasDB m where
     withDB :: (Connection -> IO a) -> m a
-
-newtype Url = Url ByteString deriving (Show)
-
-parseUrl :: String -> Env -> Url
-parseUrl s env
-    | isAbsoluteURI s = f s
-    | otherwise =
-        maybe (error $ "failed to read environment variable '" <> s <> "'")
-              f (s `lookup` env)
-  where
-    f = Url . BS.pack
-
-connect :: Url -> IO DB
-connect (Url bs) = DB <$> createPool (connectPostgreSQL bs) close 1 1 1
 
 data Chrono = Chrono
     { chronoRoot  :: !FilePath
@@ -54,51 +41,57 @@ data Chrono = Chrono
 
 type App = StateT Chrono
 
-instance (Applicative m, MonadCatchIO m) => HasDB (App m) where
+instance (Functor m, MonadCatchIO m) => HasDB (App m) where
     withDB f = get >>= liftIO . (`withResource` f) . getDBPool . chronoDB
 
 runApp :: FilePath -> [FilePath] -> String -> App IO a -> IO a
 runApp root paths murl m = do
     env <- loadEnvs paths
     let !url = parseUrl murl env
-    print url
     ss  <- Chrono root <$> getDataDir <*> connect url
     evalStateT m ss
 
-rootDir :: (Applicative m, Monad m) => App m FilePath
-rootDir = chronoRoot <$> get
+connect :: Url -> IO DB
+connect (Url bs) = DB <$> createPool (connectPostgreSQL bs) close 1 1 1
 
-rootPath :: (Applicative m, Monad m) => FilePath -> App m FilePath
-rootPath path = joinPaths path <$> rootDir
+rootDir :: Monad m => App m FilePath
+rootDir = chronoRoot `liftM` get
 
-shareDir :: (Applicative m, Monad m) => App m FilePath
-shareDir = chronoShare <$> get
+rootPath :: Monad m => FilePath -> App m FilePath
+rootPath path = joinPaths path `liftM` rootDir
 
-sharePath :: (Applicative m, Monad m) => FilePath -> App m FilePath
-sharePath path = joinPaths path <$> shareDir
+shareDir :: Monad m => App m FilePath
+shareDir = chronoShare `liftM` get
 
-migrationDir :: (Applicative m, Monad m) => App m FilePath
+sharePath :: Monad m => FilePath -> App m FilePath
+sharePath path = joinPaths path `liftM` shareDir
+
+migrationDir :: Monad m => App m FilePath
 migrationDir = rootPath "migrate"
+
+templatePath :: Monad m => String -> App m FilePath
+templatePath name = rootPath (name ++ ".tmpl")
 
 joinPaths :: FilePath -> FilePath -> FilePath
 joinPaths path = joinPath . (: [path])
 
-data Template = Migrate | Rollback
+dataFiles :: MonadIO m => App m [FilePath]
+dataFiles = mapM templatePath ["migrate", "rollback"]
 
-instance Show Template where
-    show Migrate  = "migrate.tmpl"
-    show Rollback = "rollback.tmpl"
-
-dataFiles :: (Applicative m, MonadIO m) => App m [FilePath]
-dataFiles = mapM (sharePath . show) [Migrate, Rollback]
-
-isInitialised :: (Applicative m, MonadIO m) => App m Bool
+isInitialised :: MonadIO m => App m Bool
 isInitialised = do
     fs <- dataFiles
     ps <- liftIO $ mapM doesFileExist fs
     return $! and ps
 
-type Env = [(String, String)]
+parseUrl :: String -> Env -> Url
+parseUrl s env
+    | isAbsoluteURI s = f s
+    | otherwise =
+        maybe (error $ "failed to read environment variable '" <> s <> "'")
+              f (s `lookup` env)
+  where
+    f = Url . BS.pack
 
 localEnv :: FilePath
 localEnv = "./.env"
@@ -112,15 +105,11 @@ loadEnvs paths = do
 expandVars :: [String] -> IO Env
 expandVars vars = do
     (Nothing, Just h, Nothing, p) <- P.createProcess $ expandEnv vars
-
     !c <- P.waitForProcess p
     !s <- hGetContents h
-
     hClose h
-
     when (c /= ExitSuccess)
          (error "Failed to get environment variables")
-
     return $! parseEnv s
 
 expandEnv :: [String] -> P.CreateProcess

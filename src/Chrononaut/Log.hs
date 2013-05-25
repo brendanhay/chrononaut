@@ -16,10 +16,7 @@ module Chrononaut.Log (
 
 import Prelude                 hiding (log)
 
-import Chrononaut.Schema
-import Chrononaut.Types
-import Control.Applicative
-import Control.Monad.CatchIO
+import Chrononaut.Path
 import Control.Monad.IO.Class
 import Data.Char
 import Data.Data
@@ -57,6 +54,8 @@ instance Show Rev where
 data Log = Log
     { logCur  :: !(Maybe Int)
     , logRevs :: ![Rev]
+    , logDir  :: FilePath
+    , tmplDir :: FilePath
     }
 
 instance Show Log where
@@ -74,41 +73,37 @@ instance Show Log where
         f xs   = intercalate "\n" $ map (("#   " ++) . show) xs
         (p, a) = pending log
 
-getLog :: (Applicative m, MonadCatchIO m) => FilePath -> App m Log
-getLog dir = do
-    rs  <- liftIO $ getDirectoryContents dir
-    cur <- getRevision
-    return $! Log cur . nub . sort $ mapMaybe fromPath rs
+getLog :: Maybe Int -> FilePath -> IO Log
+getLog n root = do
+    let dir = joinPath [root, "migrate"]
+    createDirectoryIfMissing True dir
+    rs <- getDirectoryContents dir
+    return $! Log n (nub . sort $ mapMaybe fromPath rs) dir root
 
-append :: MonadIO m => String -> Log -> App m Log
+append :: String -> Log -> IO ()
 append desc log = do
     !cur <- liftIO getCurrentTime
 
     let ts   = timeStamp cur
         rev  = Rev ts (underscore desc)
-        up   = fileName "up"   rev
-        down = fileName "down" rev
-        ctx  = Ctx desc (show ts) (show cur) up down
+        up   = migratePath  rev log
+        down = rollbackPath rev log
+        ctx  = Ctx desc (show ts) (show cur) (snd up) (snd down)
 
-    render up   "migrate"  ctx
-    render down "rollback" ctx
+    render up   ctx
+    render down ctx
 
-    return $! Log (logCur log) (logRevs log ++ [rev])
-
-render :: (MonadIO m, Data a) => String -> String -> a -> App m ()
-render path tmpl ctx = do
-    t <- templatePath tmpl
-    f <- rootPath path
-    liftIO $ do
-        !bs <- hastacheFile defaultConfig t $ mkGenericContext ctx
-        putStrLn $ "Writing " <> f <> " ..."
-        BL.writeFile f bs
+render :: Data a => (FilePath, FilePath) -> a -> IO ()
+render (tmpl, path) ctx = do
+    bs <- hastacheFile defaultConfig tmpl $ mkGenericContext ctx
+    putStrLn $ "Writing " <> path <> " ..."
+    BL.writeFile path bs
 
 current :: Log -> Maybe Rev
 current log = logCur log >>= (`byId` logRevs log)
 
-diff :: Int -> Maybe Int -> Log -> Either String [Rev]
-diff step n log =
+diff :: Maybe Int -> Maybe Int -> Log -> Either String [Rev]
+diff n step log =
     case (partition step n . fst $ pending log, n) of
         (Just (ps, _), Nothing) ->
             Right ps
@@ -117,8 +112,11 @@ diff step n log =
         (_, _) ->
             Left $ "Step " ++ show step ++ " is out of range"
 
-partition :: Int -> Maybe Int -> [Rev] -> Maybe ([Rev], [Rev])
-partition step n rs = maybe (partitionStep step rs) (`partitionId` rs) n
+partition :: Maybe Int -> Maybe Int -> [Rev] -> Maybe ([Rev], [Rev])
+partition rev step rs = case (rev, step) of
+    (Just  x, Nothing) -> x `partitionId` rs
+    (Nothing, Just  x) -> x `partitionStep` rs
+    _                  -> Just (rs, [])
 
 partitionId :: Int -> [Rev] -> Maybe ([Rev], [Rev])
 partitionId n rs = do
@@ -149,10 +147,17 @@ fromPath path = do
   where
     xs = split (== '-') . dropExtension $ takeFileName path
 
-fileName :: String -> Rev -> FilePath
-fileName mode (Rev n s) = take 250 parts ++ ".sql"
+migratePath, rollbackPath :: Rev -> Log -> (FilePath, FilePath)
+migratePath  rev log = (tmplPath "migrate" log,  filePath "up" rev log)
+rollbackPath rev log = (tmplPath "rollback" log, filePath "down" rev log)
+
+tmplPath :: String -> Log -> FilePath
+tmplPath name = joinPaths (name ++ ".tmpl") . tmplDir
+
+filePath :: String -> Rev -> Log -> FilePath
+filePath name (Rev n s) = joinPaths (take 150 parts ++ ".sql") . logDir
   where
-    parts = show n ++ "-" ++ mode ++ "-" ++ s
+    parts = show n ++ "-" ++ name ++ "-" ++ s
 
 timeStamp :: UTCTime -> Int
 timeStamp =

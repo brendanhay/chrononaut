@@ -32,7 +32,7 @@ executable chrononaut
         -threaded
 
     build-depends:
-          base       > 4.5 && < 5
+          base                      > 4.5 && < 5
         , bytestring
         , cmdtheline
         , directory
@@ -46,7 +46,6 @@ executable chrononaut
         , process
         , resource-pool
         , safe
-        , template-haskell
         , text
         , time
         , transformers

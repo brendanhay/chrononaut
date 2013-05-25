@@ -2,7 +2,8 @@
 
 module Chrononaut.Schema (
     -- * Queries
-      createTable
+      tableExists
+    , createTable
     , getRevision
     , setRevision
 
@@ -11,38 +12,50 @@ module Chrononaut.Schema (
     ) where
 
 import Chrononaut.Types
-import Control.Applicative
+import Control.Monad
 import Control.Monad.CatchIO
 import Data.Int
+import Data.Maybe
 import Database.PostgreSQL.Simple
+import Database.PostgreSQL.Simple.FromField (FromField)
 import Safe
 
+tableExists :: HasDB m => m Bool
+tableExists = fromMaybe False `liftM` maybeQuery sql ()
+  where
+    sql = "SELECT true FROM pg_tables \
+          \WHERE schemaname = 'public' \
+          \AND tablename    = 'migration_revision';"
+
 createTable :: HasDB m => m Bool
-createTable = (1 ==) <$> dbExecute sql ()
+createTable = (1 ==) `liftM` dbExecute sql ()
   where
     sql = "CREATE TABLE IF NOT EXISTS migration_revision (\
           \revision bigint NOT NULL);"
 
 getRevision :: HasDB m => m (Maybe Int)
-getRevision = do
-    rs <- dbQuery sql ()
-    return $! (\(Only n) -> n) <$> headMay rs
+getRevision = maybeQuery sql ()
   where
     sql = "SELECT COALESCE (revision, 0) \
           \FROM migration_revision \
           \LIMIT 1;"
 
 setRevision :: HasDB m => Int -> m Bool
-setRevision n = (1 ==) <$> dbExecute sql (Only n)
+setRevision n = (1 ==) `liftM` dbExecute sql (Only n)
   where
     sql = "DELETE FROM migration_revision; \
           \INSERT INTO migration_revision VALUES (?);"
+
+maybeQuery :: (HasDB m, ToRow q, FromField r) => Query -> q -> m (Maybe r)
+maybeQuery q ps = do
+    rs <- dbQuery q ps
+    return $! (\(Only n) -> n) `liftM` headMay rs
 
 dbQuery :: (HasDB m, ToRow q, FromRow r) => Query -> q -> m [r]
 dbQuery q ps = dbTransaction (withDB $ \c -> query c q ps)
 
 dbExecute :: (HasDB m, ToRow q) => Query -> q -> m Int64
-dbExecute tmpl qs = dbTransaction (withDB $ \c -> execute c tmpl qs)
+dbExecute q ps = dbTransaction (withDB $ \c -> execute c q ps)
 
 dbTransaction :: HasDB m => m a -> m a
 dbTransaction io = do

@@ -1,4 +1,7 @@
-module Chrononaut.Path where
+module Chrononaut.Path (
+      joinPaths
+    , copyFiles
+    ) where
 
 import Control.Monad
 import Data.Monoid
@@ -8,21 +11,18 @@ import System.IO
 
 import qualified System.Directory as D
 
-createDir :: FilePath -> IO ()
-createDir dir = do
-    p <- doesDirectoryExist dir
-    if p
-     then putStrLn $ dir <> " already exists, continuing ..."
-     else do
-         putStrLn ("Creating " <> dir <> " ...")
-         createDirectoryIfMissing True dir
+joinPaths :: FilePath -> FilePath -> FilePath
+joinPaths path = joinPath . (: [path])
 
 copyFiles :: Bool -> [FilePath] -> FilePath -> IO ()
 copyFiles force fs dir = forM_ fs $ \from -> do
     let to = joinPath [dir, takeFileName from]
     p <- confirmCopy force to
     if p
-     then putStrLn ("Writing " <> to <> " ...") >> D.copyFile from to
+     then do
+         putStrLn ("Writing " <> to <> " ...")
+         createDirectoryIfMissing True dir
+         D.copyFile from to
      else putStrLn $ "Skipping " <> to <> " ..."
 
 confirmCopy :: Bool -> FilePath -> IO Bool

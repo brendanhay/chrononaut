@@ -2,7 +2,7 @@
 
 module Main (main) where
 
-import Chrononaut.Command
+import Chrononaut.Commands
 import Control.Applicative
 import Data.Version               (showVersion)
 import System.Console.CmdTheLine
@@ -16,22 +16,16 @@ main = do
     runChoice (defTerm name)
         [ initTerm     "init"
         , statusTerm   "status"
-        -- , createTerm   "create"
-        -- , migrateTerm  "migrate"
-        -- , rollbackTerm "rollback"
-        -- , redoTerm     "redo"
-        -- , testTerm     "test"
+        , createTerm   "create"
+        , migrateTerm  "migrate"
+        , rollbackTerm "rollback"
+        , redoTerm     "redo"
         ]
 
 defTerm :: String -> (Term (IO ()), TermInfo)
 defTerm name = (term, info)
   where
-    term = ret $ (\_ _ _ _ -> helpFail Pager Nothing)
-        <$> directory
-        <*> envs
-        <*> url
-        <*> force
-
+    term = ret $ const (helpFail Pager Nothing) <$> directory
     info = (describe
         " \
         \ \
@@ -44,10 +38,8 @@ initTerm :: String -> (Term (IO ()), TermInfo)
 initTerm name = (term, info)
   where
     term = initialise
-        <$> directory
-        <*> envs
-        <*> url
-        <*> force
+        <$> force
+        <*> directory
 
     info = (describe
         "Init.")
@@ -62,7 +54,6 @@ statusTerm name = (term, info)
         <$> directory
         <*> envs
         <*> url
-        <*> force
 
     info = (describe
         "Status.")
@@ -70,79 +61,66 @@ statusTerm name = (term, info)
         , termDoc  = "Status."
         }
 
--- createTerm :: String -> (Term (IO ()), TermInfo)
--- createTerm name = (term, info)
---   where
---     term = create
---         <$> directory
---         <*> description
+createTerm :: String -> (Term (IO ()), TermInfo)
+createTerm name = (term, info)
+  where
+    term = create
+        <$> description
+        <*> directory
 
---     info = (describe
---         "Create.")
---         { termName = name
---         , termDoc  = "Create."
---         }
+    info = (describe
+        "Create.")
+        { termName = name
+        , termDoc  = "Create."
+        }
 
--- migrateTerm :: String -> (Term (IO ()), TermInfo)
--- migrateTerm name = (term, info)
---   where
---     term = migrate
---         <$> directory
---         <*> force
---         <*> step
---         <*> revision
---         <*> envs
+migrateTerm :: String -> (Term (IO ()), TermInfo)
+migrateTerm name = (term, info)
+  where
+    term = migrate
+        <$> revision
+        <*> step
+        <*> directory
+        <*> envs
+        <*> url
 
---     info = (describe
---         "Migrate.")
---         { termName = name
---         , termDoc  = "Migrate."
---         }
+    info = (describe
+        "Migrate.")
+        { termName = name
+        , termDoc  = "Migrate."
+        }
 
--- rollbackTerm :: String -> (Term (IO ()), TermInfo)
--- rollbackTerm name = (term, info)
---   where
---     term = rollback
---         <$> directory
---         <*> force
---         <*> step
---         <*> revision
---         <*> envs
+rollbackTerm :: String -> (Term (IO ()), TermInfo)
+rollbackTerm name = (term, info)
+  where
+    term = rollback
+        <$> revision
+        <*> step
+        <*> directory
+        <*> envs
+        <*> url
 
---     info = (describe
---         "Rollback.")
---         { termName = name
---         , termDoc  = "Rollback."
---         }
+    info = (describe
+        "Rollback.")
+        { termName = name
+        , termDoc  = "Rollback."
+        }
 
--- redoTerm :: String -> (Term (IO ()), TermInfo)
--- redoTerm name = (term, info)
---   where
---     term = redo
---         <$> directory
---         <*> force
---         <*> step
---         <*> revision
---         <*> envs
+redoTerm :: String -> (Term (IO ()), TermInfo)
+redoTerm name = (term, info)
+  where
+    term = redo
+        <$> revision
+        <*> step
+        <*> directory
+        <*> envs
+        <*> url
 
---     info = (describe
---         "Redo.")
---         { termName = name
---         , termDoc  = "Redo."
---         }
-
--- testTerm :: String -> (Term (IO ()), TermInfo)
--- testTerm name = (term, info)
---   where
---     term = test
---         <$> directory
---         <*> envs
-
---     info = (describe
---         "Test.")
---         { termName = name
---         , termDoc  = "Test."
---         }
+    info = (describe
+        "Redo.")
+        { termName = name
+        , termDoc  = "Redo."
+        }
 
 common :: String
 common = "COMMON OPTIONS"
@@ -168,7 +146,6 @@ directory = value . opt "db" $ (optInfo ["dir"])
 url :: Term String
 url = value . opt "DATABASE_URL" $ (optInfo ["database-url"])
     { optDoc = "Database connection url or environment variable to use."
-    , optSec = common
     }
 
 envs :: Term [FilePath]
@@ -177,20 +154,18 @@ envs = filesExist . value . optAll [] $ (optInfo ["env"])
                \used to run commands. Can be repeatedly specified. \
                \If a .env file exists in the working directory, it will be \
                \loaded and merged with with the current environment."
-    , optSec = common
     }
 
 force :: Term Bool
 force = value $ flag (optInfo ["force"])
     { optDoc = "Force operation and ignore any y/n prompts."
-    , optSec = common
     }
 
 description :: Term String
 description = required $ pos 0 Nothing posInfo { posName = "DESCRIPTION" }
 
-step :: Term Int
-step = value . opt 1 $ (optInfo ["step"])
+step :: Term (Maybe Int)
+step = value . opt Nothing $ (optInfo ["step"])
     { optDoc = "Number of migration versions to run. \
                \Implies --revision=<current+step>."
     }
